@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ammo.js btGImpactMeshShape demo</title>
+    <style>
+        body {
+            color: #61443e;
+            font-family: Monospace;
+            font-size: 13px;
+            text-align: center;
+
+            background-color: #bfd1e5;
+            margin: 0px;
+            overflow: hidden;
+        }
+
+        #info {
+            position: absolute;
+            top: 0px;
+            width: 100%;
+            padding: 5px;
+        }
+
+        a {
+            color: #a06851;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="info">Ammo.js btGImpactMeshShape demo</div>
+    <div id="container"></div>
+
+    <script src="../../builds/ammo.js"></script>
+
+    <script src="../js/three/three.min.js"></script>
+    <script src="../js/three/OrbitControls.js"></script>
+    <script src="../js/three/GLTFLoader.js"></script>
+    <script src="../js/three/Detector.js"></script>
+    <script src="../js/three/stats.min.js"></script>
+
+    <script>
+
+        const gltfLoader = new THREE.GLTFLoader();
+        const textureLoader = new THREE.TextureLoader();
+
+        Ammo().then(function (Ammo) {
+            console.log(Ammo)
+            // Detects webgl
+            if (!Detector.webgl) {
+                Detector.addGetWebGLMessage();
+                document.getElementById('container').innerHTML = "";
+            }
+
+            // - Global variables -
+
+            // Graphics variables
+            let container, stats;
+            let camera, controls, scene, renderer;
+            let texture;
+            let clock = new THREE.Clock();
+
+            // Physics variables
+            let physicsWorld;
+            const margin = 0.1;
+            const rigidBodies = [], threeObjs = [];
+            let pos = new THREE.Vector3();
+            let quat = new THREE.Quaternion();
+            let transformAux1 = new Ammo.btTransform();
+            let tempBtVec3_1;
+
+            // Models
+            let urls = [
+                '../models/chain.glb'
+            ];
+
+            // - Main code -
+            init();
+            animate();
+
+            function init() {
+
+                initGraphics();
+                initPhysics();
+                createObjects();
+
+            }
+
+            function initGraphics() {
+
+                container = document.getElementById('container');
+
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color(0xbfd1e5);
+
+                renderer = new THREE.WebGLRenderer({
+                    antialias: true 
+                });
+                renderer.setPixelRatio(window.devicePixelRatio);
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.shadowMap.enabled = true;
+                renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                container.appendChild(renderer.domElement);
+
+                camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.2, 2000);
+                camera.position.set(-40, 34, 30);
+
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+                controls.target.y = 10;
+                controls.update();
+
+                const ambientLight = new THREE.AmbientLight(0x404040);
+                scene.add(ambientLight);
+
+                const light = new THREE.DirectionalLight(0xffffff, 1);
+                light.position.set(0, 100, 100);
+                light.castShadow = true;
+                const d = 50;
+                light.shadow.camera.left = - d;
+                light.shadow.camera.right = d;
+                light.shadow.camera.top = d;
+                light.shadow.camera.bottom = - d;
+
+                light.shadow.camera.near = 1;
+                light.shadow.camera.far = 500;
+
+                light.shadow.mapSize.x = 4096;
+                light.shadow.mapSize.y = 4096;
+
+                scene.add(light);
+
+                stats = new Stats();
+                stats.domElement.style.position = 'absolute';
+                stats.domElement.style.top = '0px';
+                container.appendChild(stats.domElement);
+
+                window.addEventListener('resize', onWindowResize);
+
+            }
+
+            function initPhysics() {
+
+                // Physics configuration
+                // ---------------------
+                //btDefaultCollisionConfiguration::btDefaultCollisionConfiguration	(	const btDefaultCollisionConstructionInfo & 	constructionInfo = btDefaultCollisionConstructionInfo()	)	
+                let collisionConfiguration = new Ammo.btDefaultCollisionConfiguration(); //碰撞的配置
+                //btCollisionDispatcher::btCollisionDispatcher	(	btCollisionConfiguration * 	collisionConfiguration	)	
+                let dispatcher = new Ammo.btCollisionDispatcher(collisionConfiguration); //碰撞调度器
+                //btDbvtBroadphase::btDbvtBroadphase	(	btOverlappingPairCache * 	paircache = 0	)	
+                let broadphase = new Ammo.btDbvtBroadphase(); //宽相
+                //btSequentialImpulseConstraintSolver::btSequentialImpulseConstraintSolver	(		)	
+                let constraintSolver = new Ammo.btSequentialImpulseConstraintSolver(); //约束器
+                /* 离散的物理世界
+                btDiscreteDynamicsWorld::btDiscreteDynamicsWorld	(	
+                    btDispatcher * 	dispatcher,  //碰撞调度器  支持处理ConvexConvex 的碰撞对（碰撞时间、最近点、穿透深度）
+                    btBroadphaseInterface * 	pairCache, //宽相，是一种用于快速确定哪些物体可能相交的碰撞检测方法
+                    btConstraintSolver * 	constraintSolver, //解算器：它的作用就是‘约束’，用来限制物体的运动状态。比如： 弹簧的弹力、汽车与地面的摩檫力、门的旋转程度。
+                    btCollisionConfiguration * 	collisionConfiguration  //碰撞的配置，允许配置bullet冲突检测堆载分配器的大小
+                ) */
+                            
+                physicsWorld = new Ammo.btDiscreteDynamicsWorld(dispatcher, broadphase, constraintSolver, collisionConfiguration);//创建物理世界
+                physicsWorld.setGravity(new Ammo.btVector3(0, -9.8, 0)); //设置重力
+            }
+
+            function loadModels(urls) {
+                urls.forEach(url => {
+                    gltfLoader.load(
+                        url,
+                        (gltf) => {
+
+                            scene.add(gltf.scene);
+
+                            gltf.scene.traverse((child) => {
+                                if (child.type == 'Mesh') {
+                                    child.castShadow = true;
+                                    child.receiveShadow = true;
+                                    child.material.side = THREE.FrontSide;
+
+                                    let trimesh = createGImpactCollision(child);
+
+                                    pos.copy(child.position);
+                                    quat.copy(child.quaternion);
+
+                                    if (child.name == 'Static') {
+                                        let body = createRigidBody(child, trimesh, 0, pos, quat);
+                                        body.setCollisionFlags(body.getCollisionFlags() | 1/* btCollisionObject:: CF_STATIC_OBJECT */);
+                                    } else {
+                                        createRigidBody(child, trimesh, 1, pos, quat);
+                                    }
+
+                                }
+                            })
+                        }
+                    )
+                });
+            }
+            //创建物理对象
+            function createObjects() {
+                //地面
+                createBoxObj(100, 1, 100, 0, new THREE.Vector3(0, -4, 0), new THREE.Quaternion());
+                //方块
+                /* let quat = new THREE.Quaternion();
+                quat.setFromAxisAngle(new THREE.Vector3(1,1,1), Math.PI / 4)
+                createBoxObj(1, 1, 1, 1, new THREE.Vector3(0, 20, 0), quat); */
+
+                for(var x=0; x<10;x++){
+                  for(var y = 0; y< 10; y++){
+                    let quat = new THREE.Quaternion();
+                    quat.setFromAxisAngle(new THREE.Vector3(1,1,1), Math.PI /(x + y))
+                    createBoxObj(1, 1, 1, 1, new THREE.Vector3(x, 30+y, Math.random() * x), quat);
+                    createSphereObj(0.5, 1, new THREE.Vector3(x, 30+y*.5, Math.random() * y), new THREE.Quaternion())
+                  }  
+                }
+
+                
+
+            }
+
+
+            function randomizeMatrix() {
+
+                const position = new THREE.Vector3();
+                const rotation = new THREE.Euler();
+                const quaternion = new THREE.Quaternion();
+                const scale = new THREE.Vector3();
+
+                return function ( matrix ) {
+
+                    position.x = Math.random() * 40 - 20;
+                    position.y = Math.random() * 40 - 20;
+                    position.z = Math.random() * 40 - 20;
+
+                    rotation.x = Math.random() * 2 * Math.PI;
+                    rotation.y = Math.random() * 2 * Math.PI;
+                    rotation.z = Math.random() * 2 * Math.PI;
+
+                    quaternion.setFromEuler( rotation );
+
+                    scale.x = scale.y = scale.z = Math.random() * 1;
+
+                    matrix.compose( position, quaternion, scale );
+
+                };
+            }
+
+            function createSphereObj(radius, mass, pos, quat, material = createMaterial()){
+                const geometry = new THREE.SphereGeometry( radius, 32, 16 );
+                let sphereM = new THREE.Mesh(geometry, material);
+                sphereM.position.copy(pos);
+                sphereM.quaternion.copy(quat);
+                sphereM.castShadow = true;
+                sphereM.receiveShadow = true;
+                scene.add(sphereM);
+
+                 //创建物理引擎中的shape
+                //btSphereShape::btSphereShape	(	btScalar 	radius	)	
+
+                let shape = new Ammo.btSphereShape(
+                    radius
+                );
+                //里面包含了物体的旋转和平移信息
+                let transform = new Ammo.btTransform();
+                transform.setIdentity();// 单位矩阵
+                transform.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+                transform.setRotation(new Ammo.btQuaternion(quat.x,quat.y, quat.z, quat.w ));
+                
+                
+                /* btDefaultMotionState::btDefaultMotionState	(	const btTransform & 	startTrans = btTransform::getIdentity(),
+                const btTransform & 	centerOfMassOffset = btTransform::getIdentity() 
+                )	 */
+                //设置默认的运动状态
+                let motionState = new Ammo.btDefaultMotionState(transform);
+                //局部惯性矩阵
+                let loc = new Ammo.btVector3(0, 0, 0);
+                //计算局部惯性
+                shape.calculateLocalInertia(mass, loc); 
+                //创建刚体信息（质量、运动状态、形状、局部惯性矩阵）
+                let rigidInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, loc);
+                //创建刚体
+                let physicsBody = new Ammo.btRigidBody(rigidInfo);
+                //设置弹力
+                physicsBody.setRestitution(.5); 
+                //添加刚体到物理世界中
+                physicsWorld.addRigidBody(physicsBody);
+                //添加到物理世界中
+                sphereM.userData.physicsBody = physicsBody;
+                rigidBodies.push(sphereM)
+                
+            }
+
+            function createBoxObj(w, h , depth, mass, pos, quat, material = createMaterial()){
+                let box = new THREE.BoxGeometry(w, h , depth);
+                let boxM = new THREE.Mesh(box, material);
+                boxM.position.copy(pos);
+                boxM.quaternion.copy(quat);
+                boxM.castShadow = true;
+                boxM.receiveShadow = true;
+                scene.add(boxM);
+
+                 //创建物理引擎中的shape
+                //btBoxShape::btBoxShape	(	const btVector3 & 	boxHalfExtents	)	
+                let shape = new Ammo.btBoxShape(
+                    new Ammo.btVector3(w/2, h/2, depth/2)
+                );
+                //里面包含了物体的旋转和平移信息
+                let transform = new Ammo.btTransform();
+                transform.setIdentity();// 单位矩阵
+                transform.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+                transform.setRotation(new Ammo.btQuaternion(quat.x,quat.y, quat.z, quat.w ));
+                
+                
+                /* btDefaultMotionState::btDefaultMotionState	(	const btTransform & 	startTrans = btTransform::getIdentity(),
+                const btTransform & 	centerOfMassOffset = btTransform::getIdentity() 
+                )	 */
+                //设置默认的运动状态
+                let motionState = new Ammo.btDefaultMotionState(transform);
+                //局部惯性矩阵
+                let loc = new Ammo.btVector3(0, 0, 0);
+                //计算局部惯性
+                shape.calculateLocalInertia(mass, loc); 
+                //创建刚体信息（质量、运动状态、形状、局部惯性矩阵）
+                let rigidInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, loc);
+                //创建刚体
+                let physicsBody = new Ammo.btRigidBody(rigidInfo);
+                //设置弹力
+                physicsBody.setRestitution(.5); 
+                //添加刚体到物理世界中
+                physicsWorld.addRigidBody(physicsBody);
+                //添加到物理世界中
+                boxM.userData.physicsBody = physicsBody;
+                rigidBodies.push(boxM)
+                
+            }
+
+
+            function createParalellepipedWithPhysics(sx, sy, sz, mass, pos, quat, material) {
+
+                const object = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz, 1, 1, 1), material);
+                const shape = new Ammo.btBoxShape(new Ammo.btVector3(sx * 0.5, sy * 0.5, sz * 0.5));
+                shape.setMargin(margin);
+
+                createRigidBody(object, shape, mass, pos, quat);
+
+                return object;
+
+            }
+
+            function createParalellepiped(sx, sy, sz, mass, pos, quat, material) {
+
+                let threeObject = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz, 1, 1, 1), material);
+                let shape = new Ammo.btBoxShape(new Ammo.btVector3(sx * 0.5, sy * 0.5, sz * 0.5));
+                shape.setMargin(margin);
+
+                createRigidBody(threeObject, shape, mass, pos, quat);
+
+                return threeObject;
+
+            }
+
+            function createRandomColor() {
+
+                return Math.floor(Math.random() * (1 << 24));
+
+            }
+
+            function createMaterial(color) {
+
+                color = color || createRandomColor();
+                return new THREE.MeshStandardMaterial({ 
+                    color: color ,
+                    roughness: 0.5,
+                    metalness: 0.5,
+                    shadowMap: true,
+                    shadowMapType: THREE.PCFSoftShadowMap
+                });
+
+            }
+
+            function createRigidBody(object, physicsShape, mass, pos, quat, vel, angVel) {
+
+                if (pos) {
+
+                    object.position.copy(pos);
+
+                } else {
+
+                    pos = object.position;
+
+                }
+
+                if (quat) {
+
+                    object.quaternion.copy(quat);
+
+                } else {
+
+                    quat = object.quaternion;
+
+                }
+
+                const transform = new Ammo.btTransform();
+                transform.setIdentity();
+                transform.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+                transform.setRotation(new Ammo.btQuaternion(quat.x, quat.y, quat.z, quat.w));
+                const motionState = new Ammo.btDefaultMotionState(transform);
+
+                const localInertia = new Ammo.btVector3(0, 0, 0);
+                physicsShape.calculateLocalInertia(mass, localInertia);
+
+                const rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, physicsShape, localInertia);
+                const body = new Ammo.btRigidBody(rbInfo);
+
+                body.setFriction(0.5);
+
+                if (vel) {
+
+                    body.setLinearVelocity(new Ammo.btVector3(vel.x, vel.y, vel.z));
+
+                }
+
+                if (angVel) {
+
+                    body.setAngularVelocity(new Ammo.btVector3(angVel.x, angVel.y, angVel.z));
+
+                }
+
+                object.userData.physicsBody = body;
+                object.userData.collided = false;
+
+                if (mass > 0) {
+
+                    rigidBodies.push(object);
+
+                    // Disable deactivation
+                    body.setActivationState(4);
+
+                }
+
+                physicsWorld.addRigidBody(body);
+
+                return body;
+
+            }
+
+
+            function getMeshData(mesh) {
+
+                const index = mesh.geometry.index !== null ? mesh.geometry.index : undefined;
+                const attributes = mesh.geometry.attributes;
+                const scale = mesh.scale;
+
+                if (attributes.position === undefined) {
+
+                    console.error('getMeshData(): Position attribute required for conversion.');
+                    return;
+
+                }
+
+                const position = attributes.position;
+
+                let vertices = [];
+                let faces = [];
+
+                for (let i = 0; i < position.count; i++) {
+
+                    vertices.push({
+                        x: scale.x * position.getX(i),
+                        y: scale.y * position.getY(i),
+                        z: scale.z * position.getZ(i)
+                    });
+
+                }
+
+                if (index !== undefined) {
+
+                    for (let i = 0; i < index.count; i += 3) {
+
+                        faces.push({
+                            a: index.getX(i),
+                            b: index.getX(i + 1),
+                            c: index.getX(i + 2)
+                        });
+
+                    }
+
+                } else {
+
+                    for (let i = 0; i < position.count; i += 3) {
+
+                        faces.push({
+                            a: i,
+                            b: i + 1,
+                            c: i + 2
+                        });
+
+                    }
+                }
+
+                return {
+                    vertices,
+                    faces
+                }
+            }
+
+
+            function createGImpactCollision(mesh, scale) {
+
+                let faces, vertices;
+                let totvert = 0;
+
+                if (mesh.isMesh) {
+                    let data = getMeshData(mesh);
+
+                    faces = data.faces;
+                    vertices = data.vertices;
+
+                    totvert = vertices.length;
+
+                }
+                else {
+                    console.error("cannot make mesh shape for non-Mesh object");
+                }
+
+                if (totvert == 0) {
+                    console.error("no vertices to define mesh shape with");
+                }
+
+                if (!scale)
+                    scale = { x: 1, y: 1, z: 1 };
+
+                /* vertices, faces */
+                let ammoMesh = new Ammo.btTriangleMesh();
+
+                for (let i = 0, l = faces.length; i < l; i++) {
+                    let a = faces[i].a;
+                    let b = faces[i].b;
+                    let c = faces[i].c;
+                    ammoMesh.addTriangle(
+                        new Ammo.btVector3(vertices[a].x, vertices[a].y, vertices[a].z),
+                        new Ammo.btVector3(vertices[b].x, vertices[b].y, vertices[b].z),
+                        new Ammo.btVector3(vertices[c].x, vertices[c].y, vertices[c].z),
+                        false
+                    );
+                }
+
+                let triangleShape = new Ammo.btGImpactMeshShape(ammoMesh);
+                triangleShape.setMargin(0.01);
+                triangleShape.setLocalScaling(new Ammo.btVector3(scale.x, scale.y, scale.z));
+                triangleShape.updateBound();
+
+                return triangleShape;
+
+            }
+
+            function updatePhysics(deltaTime) {
+
+                // Step world 步长、更新的频率
+                physicsWorld.stepSimulation(deltaTime, 10);
+
+                // Update rigid bodies
+                for (let i = 0, il = rigidBodies.length; i < il; i++) {
+
+                    const objThree = rigidBodies[i];
+                    const objPhys = objThree.userData.physicsBody;
+                    const ms = objPhys.getMotionState();
+
+                    if (ms) {
+
+                        ms.getWorldTransform(transformAux1);
+                        const p = transformAux1.getOrigin();
+                        const q = transformAux1.getRotation();
+                        objThree.position.set(p.x(), p.y(), p.z());
+                        objThree.quaternion.set(q.x(), q.y(), q.z(), q.w());
+
+                        objThree.userData.collided = false;
+                        //向中心点添加一个力，参数是力的方向和大小；
+                        objPhys.applyCentralForce(new Ammo.btVector3(2, -2, 0));
+                    }
+
+                }
+            }
+
+            function onWindowResize() {
+
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+
+                renderer.setSize(window.innerWidth, window.innerHeight);
+
+            }
+
+            function animate() {
+
+                requestAnimationFrame(animate);
+
+                render();
+                stats.update();
+
+            }
+
+            function render() {
+
+                const deltaTime = clock.getDelta();
+
+                updatePhysics(deltaTime);
+
+                renderer.render(scene, camera);
+
+            }
+
+        });
+
+    </script>
+
+</body>
+
+</html>

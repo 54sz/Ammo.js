@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ammo.js btGImpactMeshShape demo</title>
+    <style>
+        body {
+            color: #61443e;
+            font-family: Monospace;
+            font-size: 13px;
+            text-align: center;
+
+            background-color: #bfd1e5;
+            margin: 0px;
+            overflow: hidden;
+        }
+
+        #info {
+            position: absolute;
+            top: 0px;
+            width: 100%;
+            padding: 5px;
+        }
+
+        a {
+            color: #a06851;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="info">Ammo.js softBody Cloth demo</div>
+    <div id="container"></div>
+
+    <script src="../../builds/ammo.js"></script>
+
+    <script src="../js/three/three.min.js"></script>
+    <script src="../js/three/OrbitControls.js"></script>
+    <script src="../js/three/GLTFLoader.js"></script>
+    <script src="../js/three/Detector.js"></script>
+    <script src="../js/three/stats.min.js"></script>
+
+    <script>
+
+        const gltfLoader = new THREE.GLTFLoader();
+        const textureLoader = new THREE.TextureLoader();
+
+        Ammo().then(function (Ammo) {
+            console.log(Ammo)
+            // Detects webgl
+            if (!Detector.webgl) {
+                Detector.addGetWebGLMessage();
+                document.getElementById('container').innerHTML = "";
+            }
+
+            // - Global variables -
+
+            // Graphics variables
+            let container, stats;
+            let camera, controls, scene, renderer;
+            let texture;
+            let clock = new THREE.Clock();
+
+            // Physics variables
+            let physicsWorld;
+            const margin = 0.1;
+            const rigidBodies = [], threeObjs = [];
+            let pos = new THREE.Vector3();
+            let quat = new THREE.Quaternion();
+            let transformAux1 = new Ammo.btTransform();
+            let tempBtVec3_1;
+            let hinge, moveDir = 0, clothMesh;
+
+            // Models
+            let urls = [
+                '../models/chain.glb'
+            ];
+
+            // - Main code -
+            init();
+            animate();
+
+            function init() {
+                addEvent();
+                initGraphics();
+                initPhysics();
+                createObjects();
+
+            }
+
+            function initGraphics() {
+
+                container = document.getElementById('container');
+
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color(0xbfd1e5);
+
+                renderer = new THREE.WebGLRenderer({
+                    antialias: true 
+                });
+                renderer.setPixelRatio(window.devicePixelRatio);
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.shadowMap.enabled = true;
+                renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                container.appendChild(renderer.domElement);
+
+                camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.2, 2000);
+                camera.position.set(-40, 34, 30);
+
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+                controls.target.y = 10;
+                controls.update();
+
+                const ambientLight = new THREE.AmbientLight(0x404040);
+                scene.add(ambientLight);
+
+                const light = new THREE.DirectionalLight(0xffffff, 1);
+                light.position.set(0, 100, 100);
+                light.castShadow = true;
+                const d = 50;
+                light.shadow.camera.left = - d;
+                light.shadow.camera.right = d;
+                light.shadow.camera.top = d;
+                light.shadow.camera.bottom = - d;
+
+                light.shadow.camera.near = 1;
+                light.shadow.camera.far = 500;
+
+                light.shadow.mapSize.x = 4096;
+                light.shadow.mapSize.y = 4096;
+                light.shadow.bias = -0.003;//阴影贴图偏差、避免出现斑驳的阴影
+
+                scene.add(light);
+
+                stats = new Stats();
+                stats.domElement.style.position = 'absolute';
+                stats.domElement.style.top = '0px';
+                container.appendChild(stats.domElement);
+
+                window.addEventListener('resize', onWindowResize);
+
+            }
+
+            function initPhysics() {
+
+                // Physics configuration
+                // ---------------------
+                //btDefaultCollisionConfiguration::btDefaultCollisionConfiguration	(	const btDefaultCollisionConstructionInfo & 	constructionInfo = btDefaultCollisionConstructionInfo()	)	
+                //let collisionConfiguration = new Ammo.btDefaultCollisionConfiguration(); //碰撞的配置
+                let collisionConfiguration = new Ammo.btSoftBodyRigidBodyCollisionConfiguration();
+                //btCollisionDispatcher::btCollisionDispatcher	(	btCollisionConfiguration * 	collisionConfiguration	)	
+                let dispatcher = new Ammo.btCollisionDispatcher(collisionConfiguration); //碰撞调度器
+                //btDbvtBroadphase::btDbvtBroadphase	(	btOverlappingPairCache * 	paircache = 0	)	
+                let broadphase = new Ammo.btDbvtBroadphase(); //宽相
+                //btSequentialImpulseConstraintSolver::btSequentialImpulseConstraintSolver	(		)	
+                let constraintSolver = new Ammo.btSequentialImpulseConstraintSolver(); //约束器
+                let softBodySolver = new Ammo.btDefaultSoftBodySolver();
+                /* 离散的物理世界
+                btDiscreteDynamicsWorld::btDiscreteDynamicsWorld	(	
+                    btDispatcher * 	dispatcher,  //碰撞调度器  支持处理ConvexConvex 的碰撞对（碰撞时间、最近点、穿透深度）
+                    btBroadphaseInterface * 	pairCache, //宽相，是一种用于快速确定哪些物体可能相交的碰撞检测方法
+                    btConstraintSolver * 	constraintSolver, //解算器：它的作用就是‘约束’，用来限制物体的运动状态。比如： 弹簧的弹力、汽车与地面的摩檫力、门的旋转程度。
+                    btCollisionConfiguration * 	collisionConfiguration  //碰撞的配置，允许配置bullet冲突检测堆载分配器的大小
+                ) */
+                            
+                physicsWorld = new Ammo.btSoftRigidDynamicsWorld(dispatcher, broadphase, constraintSolver, collisionConfiguration, softBodySolver);//创建物理世界
+                physicsWorld.setGravity(new Ammo.btVector3(0, -9.8, 0)); //设置重力
+            }
+
+            function loadModels(urls) {
+                urls.forEach(url => {
+                    gltfLoader.load(
+                        url,
+                        (gltf) => {
+
+                            scene.add(gltf.scene);
+
+                            gltf.scene.traverse((child) => {
+                                if (child.type == 'Mesh') {
+                                    child.castShadow = true;
+                                    child.receiveShadow = true;
+                                    child.material.side = THREE.FrontSide;
+
+                                    let trimesh = createGImpactCollision(child);
+
+                                    pos.copy(child.position);
+                                    quat.copy(child.quaternion);
+
+                                    if (child.name == 'Static') {
+                                        let body = createRigidBody(child, trimesh, 0, pos, quat);
+                                        body.setCollisionFlags(body.getCollisionFlags() | 1/* btCollisionObject:: CF_STATIC_OBJECT */);
+                                    } else {
+                                        createRigidBody(child, trimesh, 1, pos, quat);
+                                    }
+
+                                }
+                            })
+                        }
+                    )
+                });
+            }
+            //创建物理对象
+            function createObjects() {
+                
+                //地面
+                const plane = createBoxObj(100, 1, 100, 0, new THREE.Vector3(0, 0, 0), new THREE.Quaternion(), new THREE.MeshLambertMaterial());
+                textureLoader.load('./cube3.jpg', (texture)=>{
+                    texture.wrapS = THREE.RepeatWrapping; //水平方向重复
+                    texture.wrapT = THREE.RepeatWrapping; //垂直方向重复
+                    texture.repeat.set(40, 40); //水平、垂直方向重复次数
+                    plane.material.map = texture;
+                    plane.material.needsUpdate = true;
+
+                });
+
+                //创建砖块
+                for(var x = -5; x <= 5; x++){
+                    for( var y = 0; y <= 10; y++){
+                        createBoxObj(1.5, 1, 1.5, 1, new THREE.Vector3(x*1.5, y+0.5, -4), new THREE.Quaternion());
+                    }
+                }
+
+                //生成柱子
+                let pos = new THREE.Vector3();
+                let quat = new THREE.Quaternion();
+                let armmass = 2;
+                let mat = new THREE.MeshPhongMaterial({
+                    color: 0x606060
+                });
+                quat.set(0,0,0,1);
+                pos.set(-9, 6, 0);
+                //竖着的柱子
+                let pylon = createBoxObj(1, 12, 1, 0, pos,quat, mat);
+                pos.set(-0.5, 12.5, 0);
+                //横着的柱子
+                let arm = createBoxObj(18, 1, 1, armmass, pos,quat, mat);
+
+                //设置铰链 局部坐标
+                let pivotPylon = new Ammo.btVector3(0, 6.5, 0);
+                let pivotArm = new Ammo.btVector3(-8.5, 0, 0);
+                //旋转轴
+                let axis = new Ammo.btVector3(0, 1, 0);
+                //铰链关节 （刚体A,刚体B， A的锚点：中心点，B的锚点：局部坐标。 A的旋转轴.是否使用A的坐标系）
+                hinge = new Ammo.btHingeConstraint(
+                    pylon.userData.physicsBody,
+                    arm.userData.physicsBody,
+                    pivotPylon,
+                    pivotArm,
+                    axis,
+                    true
+                );
+                /* void btDiscreteDynamicsWorld::addConstraint	(	
+                    btTypedConstraint * 	constraint, //需要添加的约束对象
+                    bool 	disableCollisionsBetweenLinkedBodies = false  //默认为false,表示约束连接的两个物体之间是否发生碰撞
+                )	 */
+                physicsWorld.addConstraint(hinge, true)
+
+                //生成布料
+                const clothWidth = 8;
+                const clothHeight = 5;
+                const clothNumSegmentsX = clothWidth * 5;
+                const clothNumSegmentsY = clothHeight * 5;
+                const clothPos = new THREE.Vector3(5, 10, 0);
+
+                let clothGeo = new THREE.PlaneBufferGeometry(clothWidth, clothHeight, clothNumSegmentsX, clothNumSegmentsY);
+                clothGeo.translate(clothPos.x, clothPos.y, clothPos.z);
+                let clothMat = new THREE.MeshLambertMaterial({
+                    color: 0xaaaaaa,
+                    side: THREE.DoubleSide
+                });
+                clothMesh = new THREE.Mesh(clothGeo, clothMat);
+                clothMesh.receiveShadow = true;
+                clothMesh.castShadow = true;
+                scene.add(clothMesh);
+
+                textureLoader.load('../textures/grid.png', (texture)=>{
+                    texture.wrapS = THREE.RepeatWrapping; //水平方向重复
+                    texture.wrapT = THREE.RepeatWrapping; //垂直方向重复
+                    texture.repeat.set(clothNumSegmentsX, clothNumSegmentsY); //水平、垂直方向重复次数
+                    clothMesh.material.map = texture;
+                    clothMesh.material.needsUpdate = true;
+                });
+
+                //软体辅助器
+                let softBodyHelper = new Ammo.btSoftBodyHelpers();
+                //左上角
+                const clothCorner00 = new Ammo.btVector3(
+                    clothPos.x - clothWidth / 2,
+                    clothPos.y + clothHeight / 2,
+                    clothPos.z
+                );
+                //右上角
+                const clothCorner01 = new Ammo.btVector3(
+                    clothPos.x + clothWidth / 2,
+                    clothPos.y + clothHeight / 2,
+                    clothPos.z
+                );
+                //右下角
+                const clothCorner02= new Ammo.btVector3(
+                    clothPos.x + clothWidth / 2,
+                    clothPos.y - clothHeight / 2,
+                    clothPos.z
+                );
+                //左下角
+                const clothCorner03 = new Ammo.btVector3(
+                    clothPos.x - clothWidth / 2,
+                    clothPos.y - clothHeight / 2,
+                    clothPos.z
+                )
+                //创建布料路径
+                const clothSoftBody = softBodyHelper.CreatePatch(
+                    physicsWorld.getWorldInfo(), //世界信息
+                    clothCorner00, //左上
+                    clothCorner01, //右上角
+                    clothCorner03, //左下角
+                    clothCorner02, //右下角
+                    clothNumSegmentsX + 1, //节点数
+                    clothNumSegmentsY + 1,
+                    0, //固定点1、2、4、8
+                    true
+                );
+                clothMesh.userData.physicsBody = clothSoftBody;
+                //获取配置对象
+                const sbConfig = clothSoftBody.get_m_cfg();
+                //设置速度迭代
+                sbConfig.set_viterations(10);
+                //设置位置迭代
+                sbConfig.set_piterations(10);
+                //设置总质量
+                //参数1： 质量，参数2：是否根据面来生成质量
+                clothSoftBody.setTotalMass(10, false);
+                //加入到物理世界中
+                //参数1：刚体，参数2：所属碰撞组， 参数3:可碰撞对象，（-1：所有物体都可以碰撞）
+                physicsWorld.addSoftBody(clothSoftBody, 1, -1);
+
+                //把布料挂载到柱子上
+                const influence = 0.5;
+                //节点下标、刚体、是否禁止连接刚体之间的碰撞、 影像程度
+                clothSoftBody.appendAnchor(0, arm.userData.physicsBody, false, influence);
+                clothSoftBody.appendAnchor(clothNumSegmentsX, arm.userData.physicsBody, false, influence);
+            }
+
+            function addEvent(){
+                document.addEventListener('keydown', (event)=>{
+                    if(event.key == "Q"){
+                        moveDir = 1;
+                    }else if(event.key == "A"){
+                        moveDir = -1;
+                    }
+                })
+                document.addEventListener("keyup", (event)=>{
+                    moveDir = 0;
+                })
+            }
+
+            function randomizeMatrix() {
+
+                const position = new THREE.Vector3();
+                const rotation = new THREE.Euler();
+                const quaternion = new THREE.Quaternion();
+                const scale = new THREE.Vector3();
+
+                return function ( matrix ) {
+
+                    position.x = Math.random() * 40 - 20;
+                    position.y = Math.random() * 40 - 20;
+                    position.z = Math.random() * 40 - 20;
+
+                    rotation.x = Math.random() * 2 * Math.PI;
+                    rotation.y = Math.random() * 2 * Math.PI;
+                    rotation.z = Math.random() * 2 * Math.PI;
+
+                    quaternion.setFromEuler( rotation );
+
+                    scale.x = scale.y = scale.z = Math.random() * 1;
+
+                    matrix.compose( position, quaternion, scale );
+
+                };
+            }
+
+            function createSphereObj(radius, mass, pos, quat, material = createMaterial()){
+                const geometry = new THREE.SphereGeometry( radius, 32, 16 );
+                let sphereM = new THREE.Mesh(geometry, material);
+                sphereM.position.copy(pos);
+                sphereM.quaternion.copy(quat);
+                sphereM.castShadow = true;
+                sphereM.receiveShadow = true;
+                scene.add(sphereM);
+
+                 //创建物理引擎中的shape
+                //btSphereShape::btSphereShape	(	btScalar 	radius	)	
+
+                let shape = new Ammo.btSphereShape(
+                    radius
+                );
+                //里面包含了物体的旋转和平移信息
+                let transform = new Ammo.btTransform();
+                transform.setIdentity();// 单位矩阵
+                transform.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+                transform.setRotation(new Ammo.btQuaternion(quat.x,quat.y, quat.z, quat.w ));
+                
+                
+                /* btDefaultMotionState::btDefaultMotionState	(	const btTransform & 	startTrans = btTransform::getIdentity(),
+                const btTransform & 	centerOfMassOffset = btTransform::getIdentity() 
+                )	 */
+                //设置默认的运动状态
+                let motionState = new Ammo.btDefaultMotionState(transform);
+                //局部惯性矩阵
+                let loc = new Ammo.btVector3(0, 0, 0);
+                //计算局部惯性
+                shape.calculateLocalInertia(mass, loc); 
+                //创建刚体信息（质量、运动状态、形状、局部惯性矩阵）
+                let rigidInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, loc);
+                //创建刚体
+                let physicsBody = new Ammo.btRigidBody(rigidInfo);
+                //设置弹力
+                physicsBody.setRestitution(.5); 
+                //添加刚体到物理世界中
+                physicsWorld.addRigidBody(physicsBody);
+                //添加到物理世界中
+                sphereM.userData.physicsBody = physicsBody;
+                rigidBodies.push(sphereM);
+                return sphereM;
+            }
+
+            function createBoxObj(w, h , depth, mass, pos, quat, material = createMaterial()){
+                let box = new THREE.BoxGeometry(w, h , depth);
+                let boxM = new THREE.Mesh(box, material);
+                boxM.position.copy(pos);
+                boxM.quaternion.copy(quat);
+                boxM.castShadow = true;
+                boxM.receiveShadow = true;
+                scene.add(boxM);
+
+                 //创建物理引擎中的shape
+                //btBoxShape::btBoxShape	(	const btVector3 & 	boxHalfExtents	)	
+                let shape = new Ammo.btBoxShape(
+                    new Ammo.btVector3(w/2, h/2, depth/2)
+                );
+                //里面包含了物体的旋转和平移信息
+                let transform = new Ammo.btTransform();
+                transform.setIdentity();// 单位矩阵
+                transform.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+                transform.setRotation(new Ammo.btQuaternion(quat.x,quat.y, quat.z, quat.w ));
+                
+                
+                /* btDefaultMotionState::btDefaultMotionState	(	const btTransform & 	startTrans = btTransform::getIdentity(),
+                const btTransform & 	centerOfMassOffset = btTransform::getIdentity() 
+                )	 */
+                //设置默认的运动状态
+                let motionState = new Ammo.btDefaultMotionState(transform);
+                //局部惯性矩阵
+                let loc = new Ammo.btVector3(0, 0, 0);
+                //计算局部惯性
+                shape.calculateLocalInertia(mass, loc); 
+                //创建刚体信息（质量、运动状态、形状、局部惯性矩阵）
+                let rigidInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, shape, loc);
+                //创建刚体
+                let physicsBody = new Ammo.btRigidBody(rigidInfo);
+                //设置弹力
+                physicsBody.setRestitution(.5); 
+                //添加刚体到物理世界中
+                physicsWorld.addRigidBody(physicsBody);
+                //添加到物理世界中
+                boxM.userData.physicsBody = physicsBody;
+                rigidBodies.push(boxM)
+                return boxM;
+                
+            }
+
+
+            function createParalellepipedWithPhysics(sx, sy, sz, mass, pos, quat, material) {
+
+                const object = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz, 1, 1, 1), material);
+                const shape = new Ammo.btBoxShape(new Ammo.btVector3(sx * 0.5, sy * 0.5, sz * 0.5));
+                shape.setMargin(margin);
+
+                createRigidBody(object, shape, mass, pos, quat);
+
+                return object;
+
+            }
+
+            function createParalellepiped(sx, sy, sz, mass, pos, quat, material) {
+
+                let threeObject = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz, 1, 1, 1), material);
+                let shape = new Ammo.btBoxShape(new Ammo.btVector3(sx * 0.5, sy * 0.5, sz * 0.5));
+                shape.setMargin(margin);
+
+                createRigidBody(threeObject, shape, mass, pos, quat);
+
+                return threeObject;
+
+            }
+
+            function createRandomColor() {
+
+                return Math.floor(Math.random() * (1 << 24));
+
+            }
+
+            function createMaterial(color) {
+
+                color = color || createRandomColor();
+                return new THREE.MeshStandardMaterial({ 
+                    color: color ,
+                    roughness: 0.5,
+                    metalness: 0.5,
+                    shadowMap: true,
+                    shadowMapType: THREE.PCFSoftShadowMap
+                });
+
+            }
+
+
+       
+    
+            function updatePhysics(deltaTime) {
+                
+                //是否开启马达、角速度、作用力
+                hinge.enableAngularMotor( true, 0.8 * moveDir, 50 );
+                // Step world 步长、更新的频率
+                physicsWorld.stepSimulation(deltaTime, 10);
+    
+                // Update rigid bodies
+                for (let i = 0, il = rigidBodies.length; i < il; i++) {
+
+                    const objThree = rigidBodies[i];
+                    const objPhys = objThree.userData.physicsBody;
+                    const ms = objPhys.getMotionState();
+
+                    if (ms) {
+
+                        ms.getWorldTransform(transformAux1);
+                        const p = transformAux1.getOrigin();
+                        const q = transformAux1.getRotation();
+                        objThree.position.set(p.x(), p.y(), p.z());
+                        objThree.quaternion.set(q.x(), q.y(), q.z(), q.w());
+
+                        objThree.userData.collided = false;
+
+                    }
+
+                }
+
+                let softBody = clothMesh.userData.physicsBody;
+                let clothPos = clothMesh.geometry.attributes.position.array;
+                let num = clothPos.length / 3;
+                let nodes = softBody.get_m_nodes();
+                var index = 0;
+                for(let i = 0; i< num; i++){
+                    var node = nodes.at( i ); //拿到对应节点
+                    //获取刚体的位置
+                    let nodePos = node.get_m_x();
+                    clothPos[index++] = nodePos.x();
+                    clothPos[index++] = nodePos.y();
+                    clothPos[index++] = nodePos.z();
+                }
+                //重新计算法向量
+                clothMesh.geometry.computeVertexNormals();
+                //更新 顶点位置、法向量
+                clothMesh.geometry.attributes.position.needsUpdate = true;
+                clothMesh.geometry.attributes.normal.needsUpdate = true;  
+            }
+
+            function onWindowResize() {
+
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+
+                renderer.setSize(window.innerWidth, window.innerHeight);
+
+            }
+
+            function animate() {
+
+                requestAnimationFrame(animate);
+
+                render();
+                stats.update();
+
+            }
+
+            function render() {
+
+                const deltaTime = clock.getDelta();
+
+                updatePhysics(deltaTime);
+
+                renderer.render(scene, camera);
+
+            }
+
+        });
+
+    </script>
+
+</body>
+
+</html>
